@@ -14,78 +14,145 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Lint, test & build
-    runs-on: windows-latest
+  build:
+    name: Lint, test & build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          # Native ARM64 runner (free for public repos): the tests run on real ARM64.
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check tag matches the Cargo version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = ([regex]'(?m)^version\s*=\s*"([^"]+)"').Match((Get-Content Cargo.toml -Raw)).Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            Write-Error "Tag $env:GITHUB_REF_NAME does not match workspace version v$version (Cargo.toml)"
+            exit 1
+          }
+
       - uses: dtolnay/rust-toolchain@stable
         with:
+          targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Format
+        if: matrix.arch == 'x64'
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
 
       - name: Build (release)
-        run: cargo build --release --workspace --locked
+        run: cargo build --release --workspace --locked --target ${{ matrix.target }}
+
+      - name: Stage binaries
+        shell: pwsh
+        run: |
+          $rel = "target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item "$rel/revelator-gui.exe", "$rel/revelator-cli.exe" staging/
+          # The app icon written by revelator-gui's build script (newest, in case the cache
+          # holds older build directories).
+          $ico = Get-ChildItem "$rel/build/revelator-gui-*/out/app.ico" |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $ico) { Write-Error "app.ico not found"; exit 1 }
+          Copy-Item $ico.FullName staging/
 
       - name: Upload binaries
         uses: actions/upload-artifact@v7
         with:
-          name: revelator-control-${{ github.sha }}
-          path: |
-            target/release/revelator-gui.exe
-            target/release/revelator-cli.exe
+          name: bin-${{ matrix.arch }}
+          path: staging/*
+          if-no-files-found: error
+
+  installer:
+    name: Windows installer
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*
+          path: bins
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = ([regex]'(?m)^version\s*=\s*"([^"]+)"').Match((Get-Content Cargo.toml -Raw)).Groups[1].Value
+          $numeric = ($version -split '[-+]')[0]
+          $iscc = @(
+            (Get-Command iscc -ErrorAction SilentlyContinue).Source,
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $iscc) { Write-Error "Inno Setup (ISCC.exe) not found on the runner"; exit 1 }
+          $bins = (Resolve-Path bins).Path
+          & $iscc /Qp "/DAppVersion=$version" "/DNumericVersion=$numeric" `
+            "/DX64Dir=$bins\bin-x64" "/DArm64Dir=$bins\bin-arm64" `
+            "/DIconFile=$bins\bin-x64\app.ico" "/DOutputDir=$PWD\dist" `
+            installer\revelator-control.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem dist
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: dist/*.exe
+          if-no-files-found: error
 
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: check
+    needs: installer
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check tag matches the Cargo version
-        shell: pwsh
-        run: |
-          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
-            Where-Object name -eq 'revelator-gui' | Select-Object -ExpandProperty version
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-            Write-Error "Tag $env:GITHUB_REF_NAME does not match workspace version v$version (Cargo.toml)"
-            exit 1
-          }
-
-      - name: Build
-        run: cargo build --release --workspace --locked
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
 
       - name: Package
         shell: pwsh
         run: |
-          $name = "revelator-control-$env:GITHUB_REF_NAME-windows-x64"
-          New-Item -ItemType Directory -Force dist/$name | Out-Null
-          Copy-Item target/release/revelator-gui.exe, target/release/revelator-cli.exe, README.md dist/$name/
-          Compress-Archive -Path dist/$name/* -DestinationPath dist/$name.zip
-          Copy-Item target/release/revelator-gui.exe dist/
-          Copy-Item target/release/revelator-cli.exe dist/
+          $tag = $env:GITHUB_REF_NAME
+          New-Item -ItemType Directory -Force dist | Out-Null
+          foreach ($arch in 'x64', 'arm64') {
+            $name = "revelator-control-$tag-windows-$arch"
+            New-Item -ItemType Directory -Force "pkg/$name" | Out-Null
+            Copy-Item "artifacts/bin-$arch/revelator-gui.exe", "artifacts/bin-$arch/revelator-cli.exe", README.md "pkg/$name/"
+            Copy-Item LICENSE "pkg/$name/LICENSE.txt"
+            Compress-Archive -Path "pkg/$name/*" -DestinationPath "dist/$name.zip"
+          }
+          Copy-Item artifacts/installer/*.exe dist/
           $sums = Get-ChildItem dist -File | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
           }
           $sums | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          Get-ChildItem dist
 
       - name: Create GitHub release
         shell: pwsh

@@ -12,7 +12,11 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-CI (GitHub Actions, `.github/workflows/ci.yml`) runs the same fmt / clippy / test / build steps on every push and pull request. To publish a release, bump `version` in the root `Cargo.toml`, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`): the workflow builds the Windows binaries and attaches them (plus a zip and SHA-256 sums) to a GitHub release. Tags with a `-` suffix (`v0.2.0-beta.1`) become pre-releases.
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs the same fmt / clippy / test / build steps on every push and pull request, natively on x64 and ARM64 Windows, then builds the installer (`installer/revelator-control.iss`, Inno Setup 6). To publish a release, bump `version` in the root `Cargo.toml`, commit, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The GitHub release gets the installer, a portable zip per architecture and SHA-256 sums. Tags with a `-` suffix (`v0.2.0-beta.1`) become pre-releases.
+
+## Install
+
+Download `revelator-control-<version>-setup.exe` from the [releases](https://github.com/Arno500/revelator-dynamic-app/releases). It is one installer for x64 and ARM64 PCs, and it installs the build that matches the machine. It can install for the current user only (no admin rights, `%LOCALAPPDATA%\Programs`) or for all users (`Program Files`). It adds a Start menu entry and, optionally, puts `revelator-cli` on the PATH for the one-time setup below. Uninstalling removes the app, its PATH entry and its "Start on boot" entry, but keeps your settings and presets in `%APPDATA%\revelator-control`. The portable zips (`windows-x64`, `windows-arm64`) hold the same two programs without an installer.
 
 CLI: `revelator-cli --help` (`--mock` runs against an in-memory device, no hardware needed). Useful commands: `diagnose`, `probe`, `dump-state`, `get`, `set`, `watch`, `setup`.
 
