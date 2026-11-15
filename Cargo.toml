@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = ["crates/revelator-core", "crates/revelator-usb", "crates/revelator-cli", "crates/revelator-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+revelator-core = { path = "crates/revelator-core" }
+revelator-usb = { path = "crates/revelator-usb" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# egui is very slow unoptimized: even a mouse move re-lays out the whole UI. Keep dev builds
+# (plain `cargo run`) usable by optimizing dependencies and lightly optimizing our own code.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

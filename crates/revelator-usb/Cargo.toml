@@ -1,0 +1,28 @@
+[package]
+name = "revelator-usb"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+revelator-core.workspace = true
+thiserror.workspace = true
+nusb = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_Devices_DeviceAndDriverInstallation",
+] }
+# Core Audio (sample rate of the mic's endpoints); already in the tree through eframe.
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+windows-core = "0.58"

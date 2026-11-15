@@ -1,0 +1,8 @@
+[package]
+name = "revelator-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+revelator-core.workspace = true
+revelator-usb.workspace = true

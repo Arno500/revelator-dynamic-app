@@ -1,0 +1,15 @@
+[package]
+name = "revelator-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["mock"]
+# Exposes `mock::MockTransport`, a simulated device for GUI/CLI development without hardware.
+mock = []
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }

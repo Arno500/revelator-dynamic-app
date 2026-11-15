@@ -1,0 +1,13 @@
+[package]
+name = "revelator-gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+revelator-core.workspace = true
+revelator-usb.workspace = true
+eframe = "0.29"
+egui_plot = "0.29"
+tray-icon = { version = "0.19", default-features = false }
+raw-window-handle = "0.6"
