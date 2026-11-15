@@ -129,9 +129,14 @@ begin
     Path := '';
   if PathHas(Path, Dir) then
     exit;
-  if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
-    Path := Path + ';';
-  RegWriteExpandStringValue(Root, Key, 'Path', Path + Dir);
+  { Keep the existing style: a PATH that ended with ';' still does, so removal restores it. }
+  if Path = '' then
+    Path := Dir
+  else if Copy(Path, Length(Path), 1) = ';' then
+    Path := Path + Dir + ';'
+  else
+    Path := Path + ';' + Dir;
+  RegWriteExpandStringValue(Root, Key, 'Path', Path);
 end;
 
 procedure RemoveFromPath(Dir: String);
@@ -146,10 +151,9 @@ begin
     exit;
   Path := ';' + Path + ';';
   StringChangeEx(Path, ';' + Dir + ';', ';', True);
-  { Trim the separators added above. }
-  while (Length(Path) > 0) and (Path[1] = ';') do
-    Delete(Path, 1, 1);
-  while (Length(Path) > 0) and (Path[Length(Path)] = ';') do
+  { Drop only the two separators added above; the rest of PATH is left exactly as it was. }
+  Delete(Path, 1, 1);
+  if Length(Path) > 0 then
     Delete(Path, Length(Path), 1);
   RegWriteExpandStringValue(Root, Key, 'Path', Path);
 end;
