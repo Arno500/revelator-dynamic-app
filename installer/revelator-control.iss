@@ -75,7 +75,7 @@ french.AddToPath=Ajouter revelator-cli au PATH (pour la commande de configuratio
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "addtopath"; Description: "{cm:AddToPath}"
+Name: "addtopath"; Description: "{cm:AddToPath}"; Flags: unchecked
 
 [Files]
 Source: "{#X64Dir}\revelator-gui.exe"; DestDir: "{app}"; Check: not IsArm64; Flags: ignoreversion

@@ -3074,7 +3074,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "revelator-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "revelator-core",
  "revelator-usb",
@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "revelator-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "revelator-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui_plot",
@@ -3104,7 +3104,7 @@ dependencies = [
 
 [[package]]
 name = "revelator-usb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nusb",
  "revelator-core",
