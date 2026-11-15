@@ -252,7 +252,11 @@ mod imp {
 
     pub fn endpoints() -> Result<Vec<Endpoint>> {
         let _com = Com::init();
-        list(&enumerator()?)
+        // Bound to a local so it is released before `_com` uninitialises COM: a temporary in
+        // the tail expression would be dropped after the locals (Rust 2021), i.e. after
+        // CoUninitialize, which crashes once the apartment is gone.
+        let en = enumerator()?;
+        list(&en)
     }
 
     /// Forwards every endpoint event; the watcher thread re-queries (cheap, a few endpoints).
