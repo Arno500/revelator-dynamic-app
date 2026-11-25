@@ -61,6 +61,11 @@ pub trait Session: Send {
     fn flush(&mut self) -> Result<(), SessionError> {
         Ok(())
     }
+    /// Called once after every (re)connection: send the saved settings to the mic, which comes
+    /// up with its own defaults (power cycle, unplug, firmware reset).
+    fn on_connect(&mut self) -> Result<(), SessionError> {
+        Ok(())
+    }
 }
 
 pub trait Opener: Send {
@@ -197,6 +202,34 @@ impl<T: Transport> HwSession<T> {
             written: HashMap::new(),
             vofx_sent: None,
         })
+    }
+
+    /// Push the saved DSP settings (the profile in `%APPDATA%\revelator-control`) to the mic.
+    /// Does nothing when nothing was ever saved, so a first run keeps the mic's own settings.
+    /// The mixer is already sent when the session opens.
+    fn push_saved_state(&mut self) -> Result<(), SessionError> {
+        if !self.fx_path.as_ref().is_some_and(|p| p.exists()) {
+            return Ok(());
+        }
+        self.probe_rate();
+        // Echo (Delay) crashes the firmware at 88.2/96 kHz and needs a known rate: never push
+        // it blindly (same rule as `load_slot`).
+        let echo_unsafe = self.fx.get("voicefx.model") == dsp::ECHO_MODEL
+            && !self.rate.is_some_and(|r| r < 88_200);
+        if echo_unsafe {
+            let _ = self.fx.set("voicefx.on", 0.0);
+            let _ = self.fx.set("voicefx.model", 0.0);
+        }
+        for e in dsp::ENGINES {
+            self.mark(e);
+        }
+        self.flush()?;
+        if echo_unsafe {
+            return Err(SessionError::Other(
+                "the saved settings use Echo, which needs a known sample rate below 88.2 kHz: Voice FX was left off".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Take the latest Windows endpoint rate. A found rate always wins over the manual choice,
@@ -423,6 +456,10 @@ impl<T: Transport> Session for HwSession<T> {
             fx::save_state(path, &self.fx).map_err(SessionError::Other)?;
         }
         Ok(())
+    }
+
+    fn on_connect(&mut self) -> Result<(), SessionError> {
+        self.push_saved_state()
     }
 
     fn recall_slot(&mut self, slot: usize) -> Result<(), SessionError> {
@@ -763,6 +800,9 @@ fn run_cmd(s: &mut dyn Session, cmd: Cmd) -> Result<(), SessionError> {
 /// latest value always goes out when the interval has passed (smooth, little USB traffic).
 const FLUSH_INTERVAL: Duration = Duration::from_millis(40);
 
+/// Failed state reads in a row (without a disconnect report) before the session is reopened.
+const MAX_READ_FAILURES: u32 = 5;
+
 /// Queue a `Set`, replacing an earlier queued value for the same id (the latest wins).
 fn queue_set(pending: &mut Vec<(String, f32)>, id: String, v: f32) {
     match pending.iter_mut().find(|(k, _)| *k == id) {
@@ -805,6 +845,9 @@ fn device_thread(
     // Edits waiting for the next send, and when the last send happened.
     let mut pending: Vec<(String, f32)> = Vec::new();
     let mut last_send: Option<Instant> = None;
+    // Consecutive failed state reads that were not reported as a disconnect (timeouts, USB
+    // errors after the mic reset): past `MAX_READ_FAILURES` the session is dropped and reopened.
+    let mut read_failures = 0u32;
     loop {
         // Sleep until the next thing to do; commands wake us early.
         let mut wait = if session.is_some() {
@@ -927,6 +970,21 @@ fn device_thread(
                             true
                         });
                         session = Some(s);
+                        read_failures = 0;
+                        // Send the saved settings: the mic restarts with its own defaults.
+                        if let Some(s) = session.as_mut() {
+                            match s.on_connect() {
+                                Ok(()) => {}
+                                Err(SessionError::Disconnected) => session = None,
+                                Err(SessionError::Other(m)) => publish(&shared, |st| {
+                                    st.last_error = Some(format!("restoring saved settings: {m}"));
+                                    true
+                                }),
+                            }
+                        }
+                        if session.is_none() {
+                            continue;
+                        }
                         // The slot names, for the taskbar title even with the window hidden.
                         if let Some(Ok(p)) = session.as_mut().map(|s| s.mic_presets()) {
                             publish(&shared, |st| set_if_ne(&mut st.mic_presets, Some(p)));
@@ -945,9 +1003,11 @@ fn device_thread(
 
         if last_poll.elapsed() >= timing.poll {
             last_poll = Instant::now();
+            let mut lost_contact = false;
             if let Some(s) = session.as_mut() {
                 match s.read() {
                     Ok(r) => {
+                        read_failures = 0;
                         // The mic only stores the active slot; the sound is sent from the PC.
                         // So when the slot changes (button or app), load that slot's settings.
                         // Done here, not in the UI, so it works with the window hidden.
@@ -979,19 +1039,33 @@ fn device_thread(
                         }
                     }
                     Err(SessionError::Disconnected) => session = None,
-                    Err(SessionError::Other(m)) => publish(&shared, |st| {
-                        st.last_error = Some(m);
-                        true
-                    }),
+                    Err(SessionError::Other(m)) => {
+                        read_failures += 1;
+                        if read_failures >= MAX_READ_FAILURES {
+                            // The mic stopped answering without a clean unplug: start over.
+                            session = None;
+                            lost_contact = true;
+                        }
+                        publish(&shared, |st| {
+                            st.last_error = Some(m);
+                            true
+                        })
+                    }
                 }
             }
             if session.is_none() {
+                let detail = if lost_contact {
+                    "Lost contact with the mic. Reconnecting..."
+                } else {
+                    "Device disconnected. Plug in your Revelator Dynamic."
+                };
                 publish(&shared, |st| {
                     st.connection = Connection::Disconnected;
-                    st.connection_detail =
-                        "Device disconnected. Plug in your Revelator Dynamic.".into();
+                    st.connection_detail = detail.into();
                     true
                 });
+                // Not reused by the next failure.
+                read_failures = 0;
             }
         }
     }
@@ -1374,6 +1448,98 @@ mod tests {
         let mut s = HwSession::open_with_state(MockTransport::new(), "mock".into(), None).unwrap();
         s.dev.transport_mut().disconnected = true;
         assert!(matches!(s.read(), Err(SessionError::Disconnected)));
+    }
+
+    /// First session answers every read with a non-disconnect error (mic hung / reset); later
+    /// ones are healthy. Counts `on_connect` calls.
+    struct HungSession {
+        hung: bool,
+        connects: Arc<AtomicUsize>,
+    }
+    impl Session for HungSession {
+        fn info(&self) -> DeviceInfo {
+            DeviceInfo {
+                name: "hung".into(),
+                firmware: "1".into(),
+                protocol: "2".into(),
+            }
+        }
+        fn read(&mut self) -> Result<Reading, SessionError> {
+            if self.hung {
+                return Err(SessionError::Other("timeout".into()));
+            }
+            Ok(Reading {
+                values: HashMap::new(),
+                meters: HashMap::new(),
+            })
+        }
+        fn set(&mut self, _: &str, _: f32) -> Result<(), SessionError> {
+            Ok(())
+        }
+        fn recall_slot(&mut self, _: usize) -> Result<(), SessionError> {
+            Ok(())
+        }
+        fn on_connect(&mut self) -> Result<(), SessionError> {
+            self.connects.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    struct HungOpener {
+        opens: usize,
+        connects: Arc<AtomicUsize>,
+    }
+    impl Opener for HungOpener {
+        fn open(&mut self) -> Result<Box<dyn Session>, String> {
+            self.opens += 1;
+            Ok(Box::new(HungSession {
+                hung: self.opens == 1,
+                connects: self.connects.clone(),
+            }))
+        }
+    }
+
+    #[test]
+    fn silent_failures_reopen_the_session_and_resend_saved_settings() {
+        let connects = Arc::new(AtomicUsize::new(0));
+        let mut b = RealBackend::spawn(
+            Box::new(HungOpener {
+                opens: 0,
+                connects: connects.clone(),
+            }),
+            fast(),
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        while connects.load(Ordering::SeqCst) < 2 {
+            let _ = b.snapshot();
+            assert!(Instant::now() < end, "never reconnected");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        wait_for(&mut b, |s| s.connection == Connection::Connected);
+    }
+
+    #[test]
+    fn saved_state_is_pushed_on_connect() {
+        use revelator_core::mock::MockTransport;
+        let dir = std::env::temp_dir().join(format!("revelator-push-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fx.json");
+        // Nothing saved yet: the mic keeps its own settings.
+        let mut s =
+            HwSession::open_with_state(MockTransport::new(), "mock".into(), Some(path.clone()))
+                .unwrap();
+        s.rate_probe = Box::new(|| None);
+        let n0 = s.dev.transport_mut().sent.len();
+        s.on_connect().unwrap();
+        assert_eq!(s.dev.transport_mut().sent.len(), n0);
+        // A saved profile: every engine goes out once.
+        fx::save_state(&path, &s.fx).unwrap();
+        s.on_connect().unwrap();
+        let expected: usize = dsp::ENGINES
+            .into_iter()
+            .map(|e| s.fx.writes(e, DEFAULT_FS).len())
+            .sum();
+        assert!(s.dev.transport_mut().sent.len() >= n0 + expected);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
