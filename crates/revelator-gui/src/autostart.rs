@@ -13,7 +13,7 @@ const NAME: &str = "Revelator Control";
 const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
 const KEY_QUERY_VALUE: u32 = 0x0001;
 const KEY_SET_VALUE: u32 = 0x0002;
-const REG_SZ: u32 = 1;
+pub(crate) const REG_SZ: u32 = 1;
 const REG_BINARY: u32 = 3;
 const ERROR_SUCCESS: i32 = 0;
 const ERROR_FILE_NOT_FOUND: i32 = 2;
@@ -57,7 +57,7 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// An open HKCU key, closed on drop.
-struct Key(isize);
+pub(crate) struct Key(isize);
 
 impl Key {
     fn open(sub: &str, sam: u32) -> Option<Key> {
@@ -67,7 +67,7 @@ impl Key {
         (r == ERROR_SUCCESS).then_some(Key(h))
     }
 
-    fn create(sub: &str) -> Result<Key, String> {
+    pub(crate) fn create(sub: &str) -> Result<Key, String> {
         let mut h = 0isize;
         // SAFETY: as above; optional pointers are null.
         let r = unsafe {
@@ -120,7 +120,7 @@ impl Key {
         }
     }
 
-    fn set(&self, name: &str, ty: u32, data: &[u8]) -> Result<(), String> {
+    pub(crate) fn set(&self, name: &str, ty: u32, data: &[u8]) -> Result<(), String> {
         // SAFETY: `data` is valid for `data.len()` bytes.
         let r = unsafe {
             RegSetValueExW(
@@ -175,7 +175,7 @@ pub fn is_enabled() -> bool {
     present && !disabled
 }
 
-fn reg_sz(s: &str) -> Vec<u8> {
+pub(crate) fn reg_sz(s: &str) -> Vec<u8> {
     s.encode_utf16()
         .chain(Some(0))
         .flat_map(u16::to_le_bytes)

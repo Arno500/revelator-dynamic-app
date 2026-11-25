@@ -82,6 +82,8 @@ pub struct App {
     /// (it can also be changed from Task Manager).
     autostart: bool,
     was_focused: bool,
+    /// Checks GitHub for a newer release (started by `start_update_checks`).
+    updater: Arc<crate::update::Updater>,
     uc_path: String,
     preset_dir: std::path::PathBuf,
     /// Saved user presets (names), refreshed after every change.
@@ -300,6 +302,7 @@ impl App {
             start_hidden: false,
             autostart: crate::autostart::is_enabled(),
             was_focused: true,
+            updater: crate::update::Updater::new(),
             uc_path: uc_default,
             user_presets: presets::list(&preset_dir),
             preset_dir,
@@ -313,6 +316,12 @@ impl App {
             connect_requested: true,
             peaks: HashMap::new(),
         }
+    }
+
+    /// Start the background check for a newer release (not in demo mode or tests).
+    pub fn start_update_checks(&self, ctx: &egui::Context) {
+        let c = ctx.clone();
+        self.updater.spawn(move || c.request_repaint());
     }
 
     /// Select the initial tab by name (`mic|mixer|fat|fx`); unknown names are ignored.
@@ -2168,6 +2177,14 @@ impl App {
                     Err(e) => self.error(e),
                 }
             }
+            let mut check = self.updater.enabled();
+            if ui
+                .checkbox(&mut check, RichText::new("Check for updates").small())
+                .on_hover_text("Look for a new release on GitHub once a day and show a notification when there is one. Nothing is installed automatically.")
+                .changed()
+            {
+                self.updater.set_enabled(check);
+            }
             if let Some(n) = self.model.state.notice.take() {
                 self.notice = Some((n, false));
             }
@@ -2291,6 +2308,27 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
             )
             .show(ctx, |ui| self.status_bar(ui));
+        if let Some(rel) = self.updater.available() {
+            egui::TopBottomPanel::top("update")
+                .frame(
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(0x1a, 0x2a, 0x3d))
+                        .inner_margin(egui::Margin::symmetric(14.0, 6.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "Revelator Control {} is available (you have {}).",
+                            rel.version,
+                            env!("CARGO_PKG_VERSION")
+                        ));
+                        ui.hyperlink_to("Download", &rel.url);
+                        if ui.small_button("Skip this version").clicked() {
+                            self.updater.skip();
+                        }
+                    });
+                });
+        }
         let connected = self.model.state.connection == Connection::Connected;
         if connected {
             egui::TopBottomPanel::top("tabs")

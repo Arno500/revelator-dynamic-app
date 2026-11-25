@@ -10,7 +10,7 @@ pub fn default_dir() -> PathBuf {
     base_dir().join("presets")
 }
 
-fn base_dir() -> PathBuf {
+pub fn base_dir() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))

@@ -14,6 +14,7 @@ mod shell;
 mod taskbar;
 mod tips;
 mod tray;
+mod update;
 
 use eframe::egui;
 
@@ -85,6 +86,9 @@ fn main() -> eframe::Result<()> {
                 a.attach_taskbar(hwnd, &cc.egui_ctx);
                 // Only hide when the tray icon exists, otherwise there is no way back.
                 a.start_hidden = minimized && a.tray.is_some();
+            }
+            if !demo {
+                a.start_update_checks(&cc.egui_ctx);
             }
             a.startup_action = action;
             if let Some(t) = &tab {

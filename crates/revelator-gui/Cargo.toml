@@ -11,3 +11,6 @@ eframe = "0.29"
 egui_plot = "0.29"
 tray-icon = { version = "0.19", default-features = false }
 raw-window-handle = "0.6"
+ureq = { version = "2", default-features = false, features = ["native-tls"] }
+native-tls = "0.2"
+windows = { version = "0.58", features = ["UI_Notifications", "Data_Xml_Dom", "Win32_System_WinRT"] }
